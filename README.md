@@ -1,25 +1,32 @@
 # Paddle-OpenVINO
 
-Implementation of **PaddleOCR using the OpenVINO runtime**, allowing OCR inference **without requiring PaddlePaddle**.
+**paddleOpenVINO** is a lightweight **OpenVINO-based replacement for PaddleOCR inference**.
 
-This project recreates the PaddleOCR detection and recognition pipeline entirely in Python while using **OpenVINO IR models for inference**, making it lightweight and easier to deploy in environments where PaddlePaddle is not available.
+It reproduces PaddleOCR’s preprocessing, model execution, and post-processing pipeline **without requiring PaddlePaddle**.
 
-Based on **PaddleOCR v2.7.3**  
-https://github.com/PaddlePaddle/PaddleOCR/tree/v2.7.3
+The implementation closely mirrors PaddleOCR behavior for:
+
+- **Text Detection** (DB / DB++)
+- **Text Classification** (0° / 180° orientation)
+- **Text Recognition** (SVTR_LCNet with CTC decoding)
+
+All inference runs through **OpenVINO**, enabling deployment in environments where PaddlePaddle is unavailable.
 
 ---
 
 # Features
 
 - No PaddlePaddle dependency
-- Uses **OpenVINO IR models** for fast inference
-- Complete OCR pipeline implementation
-  - Text detection (DB detector)
-  - Text cropping
-  - Text recognition (SVTR-LCNet)
-- CPU inference via OpenVINO
-- Batch recognition for better throughput
-- API similar to PaddleOCR
+- Uses **OpenVINO runtime** for inference
+- Supports **OpenVINO IR (.xml + .bin)** and **ONNX models**
+- Implements the **full PaddleOCR pipeline**
+- Detection algorithms:
+  - DB
+  - DB++
+- Optional **text orientation classifier**
+- **CTC decoding identical to PaddleOCR**
+- Dynamic batching for recognition
+- Drop-in style API similar to PaddleOCR
 
 ---
 
@@ -28,7 +35,7 @@ https://github.com/PaddlePaddle/PaddleOCR/tree/v2.7.3
 Install dependencies:
 
 ```bash
-pip install openvino opencv-python numpy pyclipper shapely
+pip install numpy opencv-python openvino shapely pyclipper
 ```
 
 Python version:
@@ -39,83 +46,134 @@ Python >= 3.8
 
 ---
 
-# Model Setup
+# Supported Models
 
-The pipeline expects **OpenVINO IR models** (`.xml` and `.bin`).
+The pipeline expects PaddleOCR models converted to:
 
-Example directory structure:
+- **OpenVINO IR (.xml + .bin)**  
+or
+- **ONNX (.onnx)**
+
+Example structure:
 
 ```
 models/
- ├─ det/
- │   ├─ ppocrv3-en-det.xml
- │   └─ ppocrv3-en-det.bin
- │
- ├─ rec/
- │   ├─ ppocrv4-en-rec.xml
- │   └─ ppocrv4-en-rec.bin
- │
- └─ en_dict.txt
+├── paddle_ov_det/
+│   ├── ppocrv3-en-det.xml
+│   └── ppocrv3-en-det.bin
+│
+├── paddle_ov_rec/
+│   ├── ppocrv4-en-rec.xml
+│   └── ppocrv4-en-rec.bin
+│
+├── paddle_ov_cls/
+│   ├── ch_ppocr_mobile_v2.0_cls.xml
+│   └── ch_ppocr_mobile_v2.0_cls.bin
+│
+└── en_dict.txt
+```
+
+Classifier model is **optional**.
+
+---
+
+# Converting Models
+
+If your models are in **ONNX format**, you can convert them to OpenVINO IR.
+
+Using OpenVINO Converter:
+
+```bash
+ovc model.onnx --output_model model.xml
+```
+
+Or run directly using ONNX:
+
+```python
+det_model_path="det_model.onnx"
 ```
 
 ---
 
-# Converting Models to OpenVINO
+# Quick Start
 
-If you only have **ONNX models**, convert them using OpenVINO tools.
-
-Using **Model Optimizer (legacy)**:
-
-```bash
-mo --input_model model.onnx --output_dir models/det/
-```
-
-Using **OpenVINO Converter (recommended)**:
-
-```bash
-ovc model.onnx --output_model models/det/ppocrv3-en-det
-```
-
----
-
-# Usage
-
-Example:
+Example usage:
 
 ```python
 import cv2
-from paddleOpenVino import OpenVinoOCR
+from paddleOpenVino import paddleOpenVINO
 
-ocr = OpenVinoOCR(
-    det_model_xml="models/det/ppocrv3-en-det.xml",
-    rec_model_xml="models/rec/ppocrv4-en-rec.xml",
-    rec_char_dict_path="models/en_dict.txt",
-    device="CPU"
+ocr = paddleOpenVINO(
+    det_model_path="models/paddle_ov_det/ppocrv3-en-det.xml",
+    rec_model_path="models/paddle_ov_rec/ppocrv4-en-rec.xml"
 )
 
-img = cv2.imread("example.jpg")
+image = cv2.imread("example.jpg")
 
-# Return plain text
-text = ocr.run(img)
-print(text)
+results = ocr.ocr(image)
 
-# Return structured OCR results
-results = ocr(img)
-
-for box, (text, conf) in results:
-    print(f"[{conf:.2f}] {text}")
+for box, (text, score) in results[0]:
+    print(text, score)
 ```
+
+---
+
+# API
+
+## Initialize
+
+```python
+paddleOpenVINO(
+    det_model_path,
+    rec_model_path,
+    cls_model_path=None
+)
+```
+
+### Parameters
+
+| Parameter | Description |
+|---|---|
+| det_model_path | detection model (.xml or .onnx) |
+| rec_model_path | recognition model |
+| cls_model_path | optional orientation classifier |
+| det_algorithm | DB or DB++ |
+| det_limit_side_len | resize limit before detection |
+| det_db_thresh | pixel threshold |
+| det_db_box_thresh | box confidence threshold |
+| det_db_unclip_ratio | bounding box expansion |
+| rec_batch_num | recognition batch size |
+| drop_score | filter low-confidence results |
+
+---
+
+# Running OCR
+
+```python
+results = model.ocr(image)
+```
+
+### Arguments
+
+| Argument | Description |
+|---|---|
+| img | image path or numpy array |
+| det | enable text detection |
+| rec | enable recognition |
+| cls | enable orientation classifier |
 
 ---
 
 # Output Format
 
-The main OCR call returns:
+The OCR result format matches PaddleOCR:
 
-```python
+```
 [
-  [box, (text, confidence)],
-  ...
+  [
+    [box, (text, confidence)],
+    ...
+  ]
 ]
 ```
 
@@ -123,18 +181,56 @@ Example:
 
 ```
 [
- [[x1,y1],[x2,y2],[x3,y3],[x4,y4]], ("TOTAL", 0.98),
- [[x1,y1],[x2,y2],[x3,y3],[x4,y4]], ("12.50", 0.96)
+  [
+    [[10,20],[100,20],[100,50],[10,50]], ("TOTAL", 0.98),
+    [[10,60],[120,60],[120,90],[10,90]], ("12.50", 0.96)
+  ]
 ]
 ```
 
 Where:
 
 | Field | Description |
-|------|-------------|
+|---|---|
 | box | 4-point bounding box |
 | text | recognized text |
-| confidence | mean recognition probability |
+| confidence | recognition confidence |
+
+---
+
+# OCR Pipeline
+
+The processing pipeline mirrors PaddleOCR:
+
+```
+Input Image
+    ↓
+Resize + Normalize
+    ↓
+Text Detection (DB / DB++)
+    ↓
+Filter + Sort boxes
+    ↓
+Perspective Crop
+    ↓
+Direction Classification (optional)
+    ↓
+Text Recognition (SVTR_LCNet)
+    ↓
+CTC Decode
+    ↓
+Final OCR Results
+```
+
+---
+
+# Example Output
+
+```
+TOTAL 12.50
+DATE 2024-03-18
+STORE ABC
+```
 
 ---
 
@@ -150,61 +246,25 @@ Paddle-OpenVINO/
 
 ---
 
-# Pipeline Overview
+# Notes
 
-The OCR pipeline follows these steps:
-
-1. **Text Detection**
-   - DB detection model identifies text regions
-
-2. **Text Cropping**
-   - Perspective transform normalizes each detected text region
-
-3. **Text Recognition**
-   - Recognition model processes each cropped region
-
-4. **CTC Decoding**
-   - Converts model outputs into readable text
-
----
-
-# Example Output
-
-```
-TOTAL 12.50
-DATE 2024-03-18
-STORE ABC
-```
-
----
-
-# Performance Notes
-
-OpenVINO enables optimized CPU inference.
-
-Important parameters:
-
-```python
-device="CPU"
-num_threads=4
-rec_batch_size=6
-```
-
-Batching recognition significantly improves throughput when multiple text regions are detected.
+- The implementation mirrors PaddleOCR preprocessing and postprocessing logic.
+- Recognition uses **dynamic width resizing** for efficient batching.
+- The classifier rotates text crops if the predicted orientation is **180°**.
 
 ---
 
 # Limitations
 
-- Angle classifier from PaddleOCR is **not implemented**
-- Only **OpenVINO runtime** supported
-- Requires **pre-converted OpenVINO IR models**
+- Only **CPU inference via OpenVINO** is currently implemented
+- Polygon box output is not supported (quad only)
+- Benchmarking and GPU execution are not included
 
 ---
 
 # Credits
 
-This project reimplements the PaddleOCR pipeline using OpenVINO.
+This project reimplements PaddleOCR inference using OpenVINO.
 
 Original project:
 
